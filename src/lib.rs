@@ -36,11 +36,7 @@ impl AsyncRead for AsyncFd {
             };
 
             let ret = unsafe {
-                libc::read(
-                    self.as_raw_fd(),
-                    buf.unfilled_mut() as *mut _ as _,
-                    buf.remaining(),
-                )
+                libc::recv(self.as_raw_fd(), buf.unfilled_mut() as *mut _ as _, buf.remaining(), 0)
             };
 
             return if ret < 0 {
