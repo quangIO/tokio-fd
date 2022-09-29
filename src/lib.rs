@@ -1,29 +1,34 @@
-use std::convert::TryFrom;
-use std::io::{Error, ErrorKind, Result};
+use std::io::{self, Error, ErrorKind, Result};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::pin::Pin;
 use std::task::{Context, Poll, Poll::*};
 
 use tokio::io::{unix, AsyncRead, AsyncWrite, ReadBuf};
 
-pub struct AsyncFd(unix::AsyncFd<RawFd>);
+pub struct AsyncFd<T: AsRawFd>(unix::AsyncFd<T>);
 
-impl TryFrom<RawFd> for AsyncFd {
-    type Error = Error;
+impl<T: AsRawFd> AsyncFd<T> {
+    pub fn new(inner: T) -> io::Result<Self> {
+        set_nonblock(inner.as_raw_fd())?;
+        Ok(AsyncFd(unix::AsyncFd::new(inner)?))
+    }
 
-    fn try_from(fd: RawFd) -> Result<Self> {
-        set_nonblock(fd)?;
-        Ok(Self(unix::AsyncFd::new(fd)?))
+    pub fn into_inner(self) -> unix::AsyncFd<T> {
+        self.0
+    }
+
+    pub fn get_ref(&self) -> &unix::AsyncFd<T> {
+        &self.0
     }
 }
 
-impl AsRawFd for AsyncFd {
+impl<T: AsRawFd> AsRawFd for AsyncFd<T> {
     fn as_raw_fd(&self) -> RawFd {
-        *self.0.get_ref()
+        self.0.as_raw_fd()
     }
 }
 
-impl AsyncRead for AsyncFd {
+impl<T: AsRawFd> AsyncRead for AsyncFd<T> {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -36,7 +41,12 @@ impl AsyncRead for AsyncFd {
             };
 
             let ret = unsafe {
-                libc::recv(self.as_raw_fd(), buf.unfilled_mut() as *mut _ as _, buf.remaining(), 0)
+                libc::recv(
+                    self.as_raw_fd(),
+                    buf.unfilled_mut() as *mut _ as _,
+                    buf.remaining(),
+                    0,
+                )
             };
 
             return if ret < 0 {
@@ -57,7 +67,7 @@ impl AsyncRead for AsyncFd {
     }
 }
 
-impl AsyncWrite for AsyncFd {
+impl<T: AsRawFd> AsyncWrite for AsyncFd<T> {
     fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize>> {
         loop {
             let mut ready = match self.0.poll_write_ready(cx) {
